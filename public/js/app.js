@@ -165,11 +165,13 @@ function renderHero(anime) {
   heroTag.textContent = anime.lang || 'Español';
 
   btnHeroPlay.onclick = () => {
-    openPlayer(anime.source || 'jkanime', anime.slug || anime.id, 1, anime.title);
+    const slug = anime.slug || (anime.seasons && anime.seasons[0]?.slug) || anime.id;
+    openPlayer(anime.source || 'hianime', slug, 1, anime.title);
   };
 
   btnHeroInfo.onclick = () => {
-    openAnimeDetails(anime.source || 'jkanime', anime.slug || anime.id);
+    const slug = anime.slug || (anime.seasons && anime.seasons[0]?.slug) || anime.id;
+    openAnimeDetails(anime.source || 'hianime', slug, anime.seasons);
   };
 }
 
@@ -270,11 +272,14 @@ function renderSearchResults(results) {
     const card = document.createElement('div');
     card.className = 'anime-card';
     const sourceBadge = anime.source === 'jkanime' ? '🇪🇸 Español' : '🌐 ani-cli';
+    const seasonBadge = anime.totalSeasons > 1 
+      ? `<span class="badge season-badge">🍿 ${anime.totalSeasons} Temporadas</span>` 
+      : '';
 
     card.innerHTML = `
       <div class="card-poster">
         <img src="${anime.image}" alt="${anime.title}" loading="lazy" onerror="this.src='https://via.placeholder.com/300x450?text=Anime'">
-        <span class="badge source-badge">${sourceBadge}</span>
+        ${seasonBadge || `<span class="badge source-badge">${sourceBadge}</span>`}
         ${anime.type ? `<span class="badge type-badge">${anime.type}</span>` : ''}
         <div class="play-overlay">
           <svg class="play-icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -282,12 +287,12 @@ function renderSearchResults(results) {
       </div>
       <div class="card-info">
         <h4 class="card-title" title="${anime.title}">${anime.title}</h4>
-        <span class="card-sub">${anime.lang || 'Subtitulado'}</span>
+        <span class="card-sub">${anime.totalSeasons > 1 ? `🍿 ${anime.totalSeasons} Temporadas agrupadas` : (anime.lang || 'Subtitulado')}</span>
       </div>
     `;
 
     card.onclick = () => {
-      openAnimeDetails(anime.source, anime.slug || anime.id);
+      openAnimeDetails(anime.source, anime.slug || anime.id, anime.seasons);
     };
 
     searchResultsGrid.appendChild(card);
@@ -297,7 +302,7 @@ function renderSearchResults(results) {
 /**
  * Abrir modal de detalles y lista de episodios
  */
-async function openAnimeDetails(source, slug) {
+async function openAnimeDetails(source, slug, preloadedSeasons = null) {
   const modal = document.getElementById('animeModal');
   const modalLoader = document.getElementById('modalLoader');
   const modalContent = document.getElementById('modalContent');
@@ -313,6 +318,10 @@ async function openAnimeDetails(source, slug) {
 
     if (!data.success || !data.anime) {
       throw new Error(data.message || 'Error cargando datos del anime');
+    }
+
+    if (preloadedSeasons && (!data.anime.seasons || data.anime.seasons.length <= 1)) {
+      data.anime.seasons = preloadedSeasons;
     }
 
     state.currentAnimeDetails = data.anime;
@@ -340,12 +349,59 @@ function renderAnimeDetails(anime) {
   const episodesGrid = document.getElementById('episodesGrid');
   const btnFavorite = document.getElementById('btnFavorite');
   const epFilterInput = document.getElementById('epFilterInput');
+  const seasonSelectorContainer = document.getElementById('seasonSelectorContainer');
+  const netflixSeasonSelect = document.getElementById('netflixSeasonSelect');
 
   modalPoster.src = anime.image;
   modalTitle.textContent = anime.title;
   modalStatus.textContent = anime.status || 'En emisión';
   modalTotalEps.textContent = `${anime.totalEpisodes || anime.episodes.length} episodios`;
   modalSynopsis.textContent = anime.synopsis || 'Sin sinopsis disponible.';
+
+  // Selector estilo Netflix para cambiar de temporada dentro de la misma serie
+  if (seasonSelectorContainer && netflixSeasonSelect) {
+    if (anime.seasons && anime.seasons.length > 1) {
+      seasonSelectorContainer.classList.remove('hidden');
+      netflixSeasonSelect.innerHTML = '';
+
+      anime.seasons.forEach((season, sIdx) => {
+        const opt = document.createElement('option');
+        opt.value = season.slug;
+        const countText = season.episodesSub ? ` (${season.episodesSub} eps)` : '';
+        opt.textContent = `${season.seasonLabel || `Temporada ${sIdx + 1}`} - ${season.title}${countText}`;
+        if (season.slug === anime.slug) {
+          opt.selected = true;
+        }
+        netflixSeasonSelect.appendChild(opt);
+      });
+
+      netflixSeasonSelect.onchange = async (e) => {
+        const targetSlug = e.target.value;
+        if (!targetSlug || targetSlug === anime.slug) return;
+        episodesGrid.innerHTML = '<div class="loader-spinner" style="margin: 20px auto;"></div>';
+
+        try {
+          const res = await fetch(`/api/anime/${anime.source}/${targetSlug}`);
+          const sData = await res.json();
+          if (sData.success && sData.anime) {
+            anime.slug = sData.anime.slug;
+            anime.episodes = sData.anime.episodes || [];
+            anime.totalEpisodes = sData.anime.totalEpisodes || anime.episodes.length;
+            if (sData.anime.image) {
+              modalPoster.src = sData.anime.image;
+            }
+            modalTotalEps.textContent = `${anime.totalEpisodes} episodios`;
+            renderEpisodesList(anime.episodes, anime);
+          }
+        } catch (err) {
+          showToast(`Error al cargar temporada: ${err.message}`);
+          renderEpisodesList(anime.episodes, anime);
+        }
+      };
+    } else {
+      seasonSelectorContainer.classList.add('hidden');
+    }
+  }
 
   // Géneros
   modalGenres.innerHTML = '';

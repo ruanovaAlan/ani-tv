@@ -199,8 +199,17 @@
           </div>
         </div>
 
-        <!-- Filtro y Lista de Episodios -->
+        <!-- Selector de Temporadas estilo Netflix y Lista de Episodios -->
         <div class="modal-episodes-section">
+          <!-- Barra de Temporadas estilo Netflix -->
+          <div id="seasonSelectorContainer" class="netflix-season-bar hidden">
+            <div class="netflix-season-label-wrapper">
+              <span class="netflix-season-icon">🍿</span>
+              <span class="netflix-season-label">Temporada:</span>
+            </div>
+            <select id="netflixSeasonSelect" class="netflix-season-select" aria-label="Seleccionar temporada"></select>
+          </div>
+
           <div class="episodes-header">
             <h3>Lista de Capítulos</h3>
             <div class="ep-search-box">

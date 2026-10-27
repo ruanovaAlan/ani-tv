@@ -100,15 +100,24 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
       renderServerTabs(currentServers);
       selectIframeServer(0);
     } else if (source === 'hianime') {
-      // Modo HLS Nativo (Motor ani-cli con subtítulos en inglés/español y calidades)
+      // Motor ani-cli (HiAnime) con servidores de alta velocidad (HD-1 Megaplay 1080p, ZokoAnime)
       const jkanimeNotice = document.getElementById('jkanimeNotice');
       if (jkanimeNotice) jkanimeNotice.classList.add('hidden');
 
-      if (!data.m3u8) {
-        throw new Error('Stream HLS no disponible');
+      currentServers = data.servers || [];
+
+      if (currentServers.length === 0 && !data.m3u8) {
+        throw new Error('No se encontraron servidores reproducibles para este capítulo');
       }
 
-      setupHlsPlayer(data);
+      renderServerTabs(currentServers);
+
+      if (currentServers.length > 0) {
+        // Seleccionar primer servidor disponible (HD-1 con soporte 1080p y subtítulos)
+        selectIframeServer(0);
+      } else if (data.m3u8) {
+        setupHlsPlayer(data);
+      }
     }
 
     // Actualizar botones de navegación de episodios
@@ -121,7 +130,7 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
 }
 
 /**
- * Renderizar pestañas de servidores para JKanime
+ * Renderizar pestañas de servidores (JKanime y HiAnime / ani-cli)
  */
 function renderServerTabs(servers) {
   const serverTabs = document.getElementById('serverTabs');
@@ -130,7 +139,11 @@ function renderServerTabs(servers) {
   servers.forEach((s, idx) => {
     const btn = document.createElement('button');
     btn.className = `server-tab-btn ${idx === 0 ? 'active' : ''}`;
-    btn.textContent = s.name.replace('Servidor ', 'Opción ');
+    let label = s.name.replace(/^Servidor\s+/i, '');
+    if (label.toLowerCase().includes('hd-1') && !label.toLowerCase().includes('latino') && !label.toLowerCase().includes('dub')) {
+      label = `⚡ ${label} (1080p)`;
+    }
+    btn.textContent = label;
     btn.onclick = () => selectIframeServer(idx);
     serverTabs.appendChild(btn);
   });

@@ -141,7 +141,7 @@ async function getAnimeInfo(slug) {
 }
 
 /**
- * Obtener stream m3u8 desencriptado y subtítulos de un episodio
+ * Obtener todos los servidores de reproducción disponibles (HD-1 Megaplay, ZokoAnime, etc.)
  */
 async function getEpisodeStream(epId, mode = 'sub') {
   try {
@@ -155,10 +155,10 @@ async function getEpisodeStream(epId, mode = 'sub') {
     }
 
     const $ = cheerio.load(serversRes.data.html);
-    const servers = [];
+    const rawServers = [];
 
     $('.server-item').each((i, el) => {
-      servers.push({
+      rawServers.push({
         id: $(el).attr('data-id'),
         serverId: $(el).attr('data-server-id'),
         serverName: $(el).text().trim(),
@@ -167,53 +167,80 @@ async function getEpisodeStream(epId, mode = 'sub') {
       });
     });
 
-    // En ani-cli se busca ZokoAnime o cualquier servidor con hash
-    let selectedServer = servers.find(s => s.type === mode && s.serverName.toLowerCase().includes('zoko')) ||
-                         servers.find(s => s.type === mode && s.hash) ||
-                         servers.find(s => s.hash);
+    const playableServers = [];
+    let directStream = null;
 
-    if (!selectedServer) {
-      throw new Error('No hay servidor con stream disponible');
-    }
-
-    const decodedEmbedUrl = Buffer.from(selectedServer.hash, 'base64').toString('utf8');
-    const referer = decodedEmbedUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] + '/';
-
-    const embedRes = await axios.get(decodedEmbedUrl, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Referer': BASE_API + '/'
-      },
-      timeout: 8000
+    // Ordenar para priorizar HD-1 (Megaplay) que tiene servidores y CDN 100% activos
+    rawServers.sort((a, b) => {
+      if (a.serverName.toLowerCase().includes('hd-1')) return -1;
+      if (b.serverName.toLowerCase().includes('hd-1')) return 1;
+      return 0;
     });
 
-    const matchBlob = embedRes.data.match(/window\.__P\s*=\s*"([^"]+)"/);
-    if (!matchBlob) {
-      throw new Error('No se pudo extraer la clave de stream de ' + selectedServer.serverName);
+    for (const s of rawServers) {
+      if (!s.hash) continue;
+      try {
+        const decodedEmbedUrl = Buffer.from(s.hash, 'base64').toString('utf8');
+        const isDub = s.type === 'dub';
+        const label = `Servidor ${s.serverName} (${isDub ? 'Audio Latino / Dub' : 'Subtitulado'})`;
+
+        playableServers.push({
+          name: label,
+          embedUrl: decodedEmbedUrl,
+          serverName: s.serverName,
+          type: 'iframe',
+          mode: s.type,
+          isDub: isDub
+        });
+
+        // Si es ZokoAnime, intentar extraer también el blob por si se puede obtener subtítulos
+        if (s.serverName.toLowerCase().includes('zoko') && !directStream) {
+          try {
+            const embedRes = await axios.get(decodedEmbedUrl, {
+              headers: { 'User-Agent': USER_AGENT, 'Referer': BASE_API + '/' },
+              timeout: 4000
+            });
+            const matchBlob = embedRes.data.match(/window\.__P\s*=\s*"([^"]+)"/);
+            if (matchBlob) {
+              const decryptedJsonStr = deobfuscateBlob(matchBlob[1]);
+              const streamData = JSON.parse(decryptedJsonStr);
+              if (streamData && streamData.src) {
+                directStream = {
+                  m3u8: streamData.src,
+                  subtitles: (streamData.subtitles || []).map(sub => ({
+                    lang: sub.lang || 'en',
+                    label: sub.label || 'English',
+                    src: sub.src
+                  })),
+                  referer: decodedEmbedUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] + '/'
+                };
+              }
+            }
+          } catch (e) {
+            // direct stream opcional
+          }
+        }
+      } catch (err) {
+        // Ignorar servidor con hash inválido
+      }
     }
 
-    const decryptedJsonStr = deobfuscateBlob(matchBlob[1]);
-    const streamData = JSON.parse(decryptedJsonStr);
+    if (playableServers.length === 0) {
+      throw new Error('No se encontraron servidores reproducibles para este episodio');
+    }
 
     return {
       success: true,
-      m3u8: streamData.src,
-      subtitles: (streamData.subtitles || []).map(s => ({
-        lang: s.lang || 'en',
-        label: s.label || 'English',
-        src: s.src,
-        default: !!s.default
-      })),
-      referer: referer,
-      server: selectedServer.serverName,
-      type: selectedServer.type,
-      skip: streamData.skip || null
+      servers: playableServers,
+      directStream: directStream,
+      source: 'hianime'
     };
   } catch (err) {
-    console.error(`Error obteniendo stream epId ${epId}:`, err.message);
+    console.error(`Error obteniendo servidores epId ${epId}:`, err.message);
     return {
       success: false,
-      error: err.message
+      error: err.message,
+      servers: []
     };
   }
 }
