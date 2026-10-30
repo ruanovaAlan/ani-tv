@@ -1,7 +1,7 @@
 // AniTV Main Application Logic
 const state = {
   currentTab: 'home',
-  currentSource: 'hianime', // 'hianime' (ani-cli: subtítulos inglés y español + 1080p), 'jkanime', 'all'
+  currentSource: 'jkanime', // Enfocado en anime subtitulado en español
   searchQuery: '',
   trending: [],
   latestEpisodes: [],
@@ -69,13 +69,15 @@ function setupEventListeners() {
     showTab('home');
   });
 
-  // Selector de fuente (Español vs ani-cli)
-  sourceFilter.addEventListener('change', (e) => {
-    state.currentSource = e.target.value;
-    if (searchInput.value.trim().length >= 2) {
-      performSearch(searchInput.value.trim());
-    }
-  });
+  // Selector de fuente (si existe)
+  if (sourceFilter && sourceFilter.tagName === 'SELECT') {
+    sourceFilter.addEventListener('change', (e) => {
+      state.currentSource = e.target.value;
+      if (searchInput.value.trim().length >= 2) {
+        performSearch(searchInput.value.trim());
+      }
+    });
+  }
 
   // Chips de búsqueda rápida
   searchChips.querySelectorAll('.chip').forEach(chip => {
@@ -166,12 +168,12 @@ function renderHero(anime) {
 
   btnHeroPlay.onclick = () => {
     const slug = anime.slug || (anime.seasons && anime.seasons[0]?.slug) || anime.id;
-    openPlayer(anime.source || 'hianime', slug, 1, anime.title);
+    openPlayer(anime.source || 'jkanime', slug, 1, anime.title);
   };
 
   btnHeroInfo.onclick = () => {
     const slug = anime.slug || (anime.seasons && anime.seasons[0]?.slug) || anime.id;
-    openAnimeDetails(anime.source || 'hianime', slug, anime.seasons);
+    openAnimeDetails(anime.source || 'jkanime', slug, anime.seasons);
   };
 }
 
@@ -271,7 +273,7 @@ function renderSearchResults(results) {
   results.forEach(anime => {
     const card = document.createElement('div');
     card.className = 'anime-card';
-    const sourceBadge = anime.source === 'jkanime' ? '🇪🇸 Español' : '🌐 ani-cli';
+    const sourceBadge = '🇪🇸 Español';
     const seasonBadge = anime.totalSeasons > 1 
       ? `<span class="badge season-badge">🍿 ${anime.totalSeasons} Temporadas</span>` 
       : '';

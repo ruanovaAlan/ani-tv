@@ -195,24 +195,20 @@ body {
   gap: 12px;
 }
 
-.source-select-wrapper {
-  position: relative;
-}
-
-.source-select {
-  background: var(--bg-card);
-  color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  transition: var(--transition-fast);
-}
-.source-select:focus {
-  border-color: var(--primary);
+.lang-badge-pill {
+  position: static;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.15);
 }
 
 .btn-install {
@@ -1081,6 +1077,18 @@ body {
   border-color: var(--primary);
 }
 
+#tabServerDirectHls {
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+}
+
+#tabServerDirectHls.active {
+  background: var(--primary-gradient);
+  color: #fff;
+  border-color: #ec4899;
+  box-shadow: 0 0 15px rgba(236, 72, 153, 0.4);
+}
+
 /* Área de video viewport */
 .player-viewport {
   flex: 1;
@@ -1145,7 +1153,7 @@ body {
   letter-spacing: 0.2px;
 }
 
-/* Banner de Aviso de Fuente (JKanime vs ani-cli) */
+/* Banner de Aviso de Fuente */
 .source-notice-banner {
   background: rgba(30, 41, 59, 0.95);
   border-bottom: 1px solid rgba(99, 102, 241, 0.3);

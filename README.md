@@ -16,25 +16,15 @@ Plataforma Web interactiva y **PWA (Progressive Web App)** inspirada en [ani-cli
    - Acceso rápido a animes populares (*One Piece*, *Solo Leveling*, *Naruto*, *Dandadan*, *Jujutsu Kaisen*, *Bleach*).
    - Limpieza instantánea y filtrado por capítulos.
 
-3. **🌐 Subtítulos en Español e Inglés**:
-   - **🇬🇧 Subtítulos en Inglés (English)**: Pistas originales WebVTT extraídas directamente del motor de streaming.
-   - **🇪🇸 Subtítulos en Español (Spanish)**: Tanto animes nativos con subtítulos en español (JKanime) como pistas traducidas y sincronizadas al español en tiempo real (HiAnime).
-   - **🚫 Modo Sin Subtítulos**: Opción para desactivar subtítulos con un clic.
-   - Subtítulos de alta legibilidad con tipografía moderna, fondo oscuro semitransparente y contorno contrastado.
+3. **🇪🇸 Catálogo con Subtítulos en Español Nativo**:
+   - Fuente principal optimizada con **JKanime**, garantizando subtítulos oficiales en español y estrenos al día.
+   - Centralización automática estilo Netflix para agrupar todas las temporadas, películas y sagas bajo una sola ficha.
 
-4. **⚙️ Selector de Calidad de Imagen**:
-   - Selector en la barra del reproductor con cambio inmediato de resolución:
-     - 🌟 **Auto (Adaptativo)**
-     - 📺 **1080p (Full HD)**
-     - 📺 **720p (HD)**
-     - 📺 **480p (SD)**
-     - 📺 **360p (Móvil)**
-   - Distintivo visual en pantalla (`1080p HD`, `720p`) indicando la resolución activa en tiempo real.
-
-5. **📺 Reproductor Avanzado**:
-   - Selector de opciones y servidores con un solo clic.
+4. **📺 Reproductor Avanzado con Streaming Directo**:
+   - Extracción de flujo HLS (.m3u8) nativo para reproducción fluida sin publicidad invasiva.
+   - Múltiples servidores de respaldo disponibles con un solo clic.
    - Navegación fluida entre **Episodio Anterior** y **Episodio Siguiente**.
-   - Modo pantalla completa y atajos de teclado (`Espacio` para pausa/play, `Flechas` para adelantar/retroceder, `F` para fullscreen, `N` para siguiente capítulo).
+   - Modo pantalla completa y atajos de teclado (`Espacio` para pausa/play, `Flechas` para adelantar/retroceder, `F` para fullscreen, `N` para siguiente capítulo, `P` para capítulo anterior).
 
 5. **💾 Continuar Viendo y Biblioteca Personal**:
    - Historial persistente en `localStorage`.
@@ -83,9 +73,10 @@ ani-tv/
 ├── package.json               # Dependencias (express, cheerio, axios, cors)
 ├── server.js                  # Servidor Express, API REST y proxies de streaming
 ├── src/
-│   └── scrapers/
-│       ├── jkanime.js         # Scraper de anime en español
-│       └── hianime.js         # Scraper del motor ani-cli (m3u8 y VTT)
+│   ├── scrapers/
+│   │   └── jkanime.js         # Scraper de anime en español
+│   └── utils/
+│       └── centralizer.js     # Agrupador de temporadas estilo Netflix
 ├── public/
 │   ├── index.html             # Shell de la PWA
 │   ├── manifest.json          # Manifiesto de la PWA

@@ -1,9 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const axios = require('axios');
 const jkanime = require('./src/scrapers/jkanime');
-const hianime = require('./src/scrapers/hianime');
 const { centralizeAnimeList, parseSeasonInfo } = require('./src/utils/centralizer');
 
 const app = express();
@@ -26,32 +24,23 @@ function setCache(key, data) {
   cache.set(key, { time: Date.now(), data });
 }
 
-// 1. Búsqueda de animes
+// 1. Búsqueda de animes (Exclusivamente JKanime con Subtítulos en Español)
 app.get('/api/search', async (req, res) => {
   const q = req.query.q || '';
-  const source = req.query.source || 'all'; // jkanime, hianime, all
 
   if (!q.trim()) {
     return res.json({ success: true, results: [] });
   }
 
-  const cacheKey = `search:${source}:${q.toLowerCase().trim()}`;
+  const cacheKey = `search:jkanime:${q.toLowerCase().trim()}`;
   const cached = getCached(cacheKey, 5 * 60 * 1000);
   if (cached) return res.json(cached);
 
   try {
-    let results = [];
-    if (source === 'jkanime' || source === 'all') {
-      const jkResults = await jkanime.search(q);
-      results = results.concat(jkResults);
-    }
-    if (source === 'hianime' || (source === 'all' && results.length < 5)) {
-      const hiResults = await hianime.search(q);
-      results = results.concat(hiResults);
-    }
+    const rawResults = await jkanime.search(q);
 
     // Centralizar por franquicia (Netflix Style)
-    const centralizedResults = centralizeAnimeList(results);
+    const centralizedResults = centralizeAnimeList(rawResults);
 
     const response = { success: true, count: centralizedResults.length, results: centralizedResults };
     setCache(cacheKey, response);
@@ -77,15 +66,15 @@ app.get('/api/latest', async (req, res) => {
   }
 });
 
-// 3. Animes destacados y tendencias (usando motor ani-cli para calidades 1080p y subtítulos en inglés/español)
+// 3. Animes destacados y tendencias (Subtitulados al Español)
 app.get('/api/trending', async (req, res) => {
-  const cacheKey = 'trending:anime:v3';
+  const cacheKey = 'trending:anime:es:v1';
   const cached = getCached(cacheKey, 30 * 60 * 1000);
   if (cached) return res.json(cached);
 
   try {
-    const popularQueries = ['Solo Leveling', 'One Piece', 'Dandadan', 'Chainsaw Man', 'Jujutsu Kaisen', 'Bleach', 'Attack on Titan'];
-    const searchPromises = popularQueries.map(q => hianime.search(q));
+    const popularQueries = ['One Piece', 'Solo Leveling', 'Dandadan', 'Jujutsu Kaisen', 'Chainsaw Man', 'Kimetsu no Yaiba', 'Bleach'];
+    const searchPromises = popularQueries.map(q => jkanime.search(q));
     const searchResults = await Promise.all(searchPromises);
 
     let rawTrending = [];
@@ -105,20 +94,15 @@ app.get('/api/trending', async (req, res) => {
   }
 });
 
-// 4. Detalles de un anime y lista completa de episodios
-app.get('/api/anime/:source/:slug', async (req, res) => {
-  const { source, slug } = req.params;
-  const cacheKey = `anime:${source}:${slug}`;
+// 4. Detalles de un anime y lista completa de episodios (Soporta /api/anime/:slug y /api/anime/:source/:slug)
+const getAnimeDetailsHandler = async (req, res) => {
+  const slug = req.params.slug || req.params.source;
+  const cacheKey = `anime:jkanime:${slug}`;
   const cached = getCached(cacheKey, 15 * 60 * 1000);
   if (cached) return res.json(cached);
 
   try {
-    let data = null;
-    if (source === 'jkanime') {
-      data = await jkanime.getAnimeInfo(slug);
-    } else if (source === 'hianime') {
-      data = await hianime.getAnimeInfo(slug);
-    }
+    const data = await jkanime.getAnimeInfo(slug);
 
     if (!data) {
       return res.status(404).json({ success: false, message: 'Anime no encontrado' });
@@ -127,8 +111,7 @@ app.get('/api/anime/:source/:slug', async (req, res) => {
     // Buscar temporadas de la misma franquicia para el selector estilo Netflix
     try {
       const { baseTitle } = parseSeasonInfo(data.title);
-      const searchFn = source === 'hianime' ? hianime.search : jkanime.search;
-      const relatedResults = await searchFn(baseTitle);
+      const relatedResults = await jkanime.search(baseTitle);
       const centralized = centralizeAnimeList(relatedResults);
       const matchingFranchise = centralized.find(c => c.title.toLowerCase() === baseTitle.toLowerCase()) || centralized[0];
       if (matchingFranchise && matchingFranchise.seasons && matchingFranchise.seasons.length > 0) {
@@ -156,245 +139,28 @@ app.get('/api/anime/:source/:slug', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
 
-// Cache de subtítulos traducidos en memoria
-const vttCache = new Map();
+app.get('/api/anime/:source/:slug', getAnimeDetailsHandler);
+app.get('/api/anime/:slug', getAnimeDetailsHandler);
 
-/**
- * Traduce contenido WEBVTT dividiendo los cues en lotes respetando el límite de 350 caracteres
- */
-async function translateVttContent(vttContent, fromLang = 'en', toLang = 'es') {
-  const lines = vttContent.split('\n');
-  const cues = [];
-  let currentCue = null;
-  const headerLines = [];
-  let readingHeader = true;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.includes('-->')) {
-      readingHeader = false;
-      currentCue = { time: line, text: [] };
-      cues.push(currentCue);
-    } else if (readingHeader) {
-      headerLines.push(line);
-    } else if (currentCue) {
-      if (line.trim().length > 0) {
-        currentCue.text.push(line);
-      }
-    }
-  }
-
-  if (cues.length === 0) return vttContent;
-
-  // Agrupar en lotes con longitud total menor a 350 caracteres para evitar errores de API
-  const batches = [];
-  let currentBatch = [];
-  let currentLength = 0;
-
-  for (const cue of cues) {
-    const cleanText = cue.text.join(' ').replace(/<[^>]+>/g, '').trim();
-    if (currentLength + cleanText.length + 5 > 350 && currentBatch.length > 0) {
-      batches.push(currentBatch);
-      currentBatch = [];
-      currentLength = 0;
-    }
-    currentBatch.push(cue);
-    currentLength += cleanText.length + 5;
-  }
-  if (currentBatch.length > 0) batches.push(currentBatch);
-
-  // Traducir los lotes en paralelo con concurrencia controlada (5 a la vez)
-  const concurrency = 6;
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const chunk = batches.slice(i, i + concurrency);
-    await Promise.all(
-      chunk.map(async (batch) => {
-        const textJoined = batch.map(c => c.text.join(' ').replace(/<[^>]+>/g, '')).join(' ||| ');
-        try {
-          const transRes = await axios.get(
-            `https://api.mymemory.translated.net/get?q=${encodeURIComponent(textJoined)}&langpair=${fromLang}|${toLang}`,
-            { timeout: 3500 }
-          );
-          const translatedRaw = transRes.data?.responseData?.translatedText;
-          if (translatedRaw && !translatedRaw.includes('LIMIT EXCEEDED')) {
-            const parts = translatedRaw.split('|||');
-            batch.forEach((cue, bIdx) => {
-              if (parts[bIdx]) {
-                cue.translatedText = parts[bIdx].trim();
-              }
-            });
-          }
-        } catch (e) {
-          // Si un lote falla o hay timeout, se mantiene el texto original
-        }
-      })
-    );
-  }
-
-  // Reconstruir archivo VTT
-  let output = 'WEBVTT\n\n';
-  cues.forEach(cue => {
-    output += `${cue.time}\n`;
-    output += `${cue.translatedText || cue.text.join('\n')}\n\n`;
-  });
-
-  return output;
-}
-
-// 5. Servidores de reproducción para un episodio
-app.get('/api/servers/:source/:slug/:epNo', async (req, res) => {
-  const { source, slug, epNo } = req.params;
-  const epId = req.query.epId; // Para hianime
+// 5. Servidores de reproducción para un episodio (Soporta /api/servers/:slug/:epNo y /api/servers/:source/:slug/:epNo)
+const getServersHandler = async (req, res) => {
+  const slug = req.params.slug;
+  const epNo = req.params.epNo;
 
   try {
-    if (source === 'jkanime') {
-      const data = await jkanime.getEpisodeServers(slug, epNo);
-      return res.json({ success: true, ...data });
-    } else if (source === 'hianime') {
-      let targetEpId = epId;
-      if (!targetEpId) {
-        const info = await hianime.getAnimeInfo(slug);
-        const found = info?.episodes?.find(e => String(e.number) === String(epNo));
-        targetEpId = found ? found.id : null;
-      }
-
-      if (!targetEpId) {
-        return res.status(404).json({ success: false, error: 'No se encontró el identificador del episodio para ' + slug });
-      }
-
-      const stream = await hianime.getEpisodeStream(targetEpId, req.query.mode || 'sub');
-      if (!stream.success) {
-        return res.json({ success: false, error: stream.error });
-      }
-
-      // Preparar lista de subtítulos con opciones en Inglés y Español si están disponibles en directStream
-      const processedSubtitles = [];
-      const directSubs = stream.directStream?.subtitles || [];
-      const referer = stream.directStream?.referer || 'https://zokoanime.video/';
-
-      const enSub = directSubs.find(s => s.lang === 'en' || s.label?.toLowerCase().includes('english'));
-      if (enSub) {
-        // Opción 1: Subtítulos en Inglés originales
-        processedSubtitles.push({
-          lang: 'en',
-          label: 'English (Inglés)',
-          src: `/api/proxy/vtt?url=${encodeURIComponent(enSub.src)}&ref=${encodeURIComponent(referer)}`,
-          default: false
-        });
-
-        // Opción 2: Subtítulos en Español traducidos
-        processedSubtitles.push({
-          lang: 'es',
-          label: 'Español (Spanish)',
-          src: `/api/proxy/vtt/translate?url=${encodeURIComponent(enSub.src)}&ref=${encodeURIComponent(referer)}&target=es`,
-          default: true
-        });
-      }
-
-      directSubs.forEach(s => {
-        if (s.lang !== 'en' && !s.label?.toLowerCase().includes('english')) {
-          processedSubtitles.push({
-            lang: s.lang || 'other',
-            label: s.label || s.lang,
-            src: `/api/proxy/vtt?url=${encodeURIComponent(s.src)}&ref=${encodeURIComponent(referer)}`,
-            default: s.lang === 'es'
-          });
-        }
-      });
-
-      return res.json({
-        success: true,
-        slug,
-        episode: epNo,
-        servers: stream.servers || [],
-        m3u8: stream.directStream?.m3u8 || null,
-        referer: referer,
-        subtitles: processedSubtitles,
-        source: 'hianime'
-      });
-    }
-
-    res.status(400).json({ success: false, message: 'Fuente no reconocida' });
+    const data = await jkanime.getEpisodeServers(slug, epNo);
+    return res.json({ success: true, ...data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
 
-// 6. Proxy para archivos VTT (subtítulos) sin problemas de CORS
-app.get('/api/proxy/vtt', async (req, res) => {
-  const vttUrl = req.query.url;
-  const ref = req.query.ref || 'https://zokoanime.video/';
+app.get('/api/servers/:source/:slug/:epNo', getServersHandler);
+app.get('/api/servers/:slug/:epNo', getServersHandler);
 
-  if (!vttUrl) return res.status(400).send('URL requerida');
-
-  try {
-    const response = await axios.get(vttUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': ref
-      },
-      responseType: 'text',
-      timeout: 8000
-    });
-
-    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(response.data);
-  } catch (err) {
-    res.status(502).send('Error obteniendo subtítulos: ' + err.message);
-  }
-});
-
-// 6.1. Endpoint de traducción para subtítulos VTT en tiempo real
-app.get('/api/proxy/vtt/translate', async (req, res) => {
-  const vttUrl = req.query.url;
-  const ref = req.query.ref || 'https://zokoanime.video/';
-  const target = req.query.target || 'es';
-
-  if (!vttUrl) return res.status(400).send('URL requerida');
-
-  const cacheKey = `${target}:${vttUrl}`;
-  if (vttCache.has(cacheKey)) {
-    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    return res.send(vttCache.get(cacheKey));
-  }
-
-  try {
-    const rawRes = await axios.get(vttUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': ref
-      },
-      responseType: 'text',
-      timeout: 8000
-    });
-
-    const translatedVtt = await translateVttContent(rawRes.data, 'en', target);
-    vttCache.set(cacheKey, translatedVtt);
-
-    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(translatedVtt);
-  } catch (err) {
-    console.warn('Fallback a VTT original por error en traducción:', err.message);
-    try {
-      const origRes = await axios.get(vttUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': ref },
-        responseType: 'text'
-      });
-      res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.send(origRes.data);
-    } catch (e2) {
-      res.status(502).send('Error al obtener subtítulos');
-    }
-  }
-});
-
-// 7. Ruta de respaldo para SPA PWA (compatible con Express 5)
+// 6. Ruta de respaldo para SPA PWA (compatible con Express 5)
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -402,8 +168,7 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`===============================================`);
   console.log(`🎬 AniTV PWA Web Server activo en: http://localhost:${PORT}`);
-  console.log(`📡 Fuentes disponibles:`);
+  console.log(`📡 Fuente activa:`);
   console.log(`   - 🇪🇸 JKanime (Español Nativo con Subtítulos)`);
-  console.log(`   - 🌐 HiAnime (ani-cli v5.1.6 Engine)`);
   console.log(`===============================================`);
 });

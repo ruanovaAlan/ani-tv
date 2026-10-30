@@ -23,7 +23,7 @@
   <!-- Stylesheet -->
   <link rel="stylesheet" href="/css/style.css">
 
-  <!-- HLS.js for ani-cli direct streaming -->
+  <!-- HLS.js para reproducción directa -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 </head>
 <body>
@@ -52,14 +52,8 @@
 
       <!-- Controles de cabecera -->
       <div class="nav-actions">
-        <!-- Selector de fuente -->
-        <div class="source-select-wrapper" title="Seleccionar fuente de anime">
-          <select id="sourceFilter" class="source-select">
-            <option value="hianime" selected>🌐 Motor ani-cli (Subtítulos en Inglés y Español + 1080p)</option>
-            <option value="all">✨ Todas las Fuentes</option>
-            <option value="jkanime">🇪🇸 JKanime (Español Nativo)</option>
-          </select>
-        </div>
+        <span class="badge lang-badge-pill" title="Catálogo con subtítulos en español">🇪🇸 Sub Español</span>
+        <input type="hidden" id="sourceFilter" value="jkanime">
 
         <!-- Botón Instalar PWA -->
         <button id="btnInstallApp" class="btn-install" style="display: none;" title="Instalar AniTV en este dispositivo">
@@ -233,39 +227,6 @@
           <span id="activeQualityBadge" class="badge quality-badge">HD</span>
         </div>
         <div class="player-header-actions">
-          <!-- Selector de Subtítulos (Español / Inglés / Off) -->
-          <div class="control-group" title="Seleccionar idioma de subtítulos">
-            <svg class="control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-            <select id="subtitleSelect" class="player-select-btn">
-              <option value="es">🇪🇸 Español</option>
-              <option value="en">🇬🇧 English</option>
-              <option value="off">🚫 Sin subtítulos</option>
-            </select>
-          </div>
-
-          <!-- Selector de Calidad de Imagen -->
-          <div class="control-group" title="Seleccionar calidad de imagen">
-            <svg class="control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            <select id="qualitySelect" class="player-select-btn">
-              <option value="-1">Auto (Adaptativo)</option>
-              <option value="1080">1080p Full HD</option>
-              <option value="720">720p HD</option>
-              <option value="480">480p SD</option>
-              <option value="360">360p Móvil</option>
-            </select>
-          </div>
-
-          <!-- Selector de Velocidad -->
-          <div class="control-group speed-group" title="Velocidad de reproducción">
-            <select id="speedSelect" class="player-select-btn">
-              <option value="1">1.0x</option>
-              <option value="1.25">1.25x</option>
-              <option value="1.5">1.5x</option>
-              <option value="2">2.0x</option>
-              <option value="0.75">0.75x</option>
-            </select>
-          </div>
-
           <button id="btnSkipIntro" class="btn-ctrl btn-skip-intro-top" title="Saltar intro">+85s Intro</button>
 
           <button id="btnPrevEpisode" class="btn-ctrl" title="Episodio Anterior">
@@ -283,13 +244,7 @@
         </div>
       </div>
 
-      <!-- Aviso de fuente JKanime vs ani-cli -->
-      <div id="jkanimeNotice" class="source-notice-banner hidden">
-        <span>ℹ️ Esta versión tiene subtítulos en español integrados en la imagen del video. Si deseas <b>subtítulos en inglés</b> y selector de <b>1080p</b>:</span>
-        <button id="btnSwitchToAniCli" class="btn-switch-source">👉 Cambiar al Motor ani-cli</button>
-      </div>
-
-      <!-- Selector de Servidores -->
+      <!-- Selector de Servidores con detección automática -->
       <div id="serverTabs" class="server-tabs-bar"></div>
 
       <!-- Área de Reproducción de Video -->
@@ -304,7 +259,7 @@
         <!-- Contenedor Iframe (JKanime en Español) -->
         <div id="iframeContainer" class="video-container hidden"></div>
 
-        <!-- Contenedor HLS Nativo (ani-cli / HiAnime) -->
+        <!-- Contenedor HLS Nativo -->
         <div id="hlsContainer" class="video-container hidden">
           <video id="hlsVideo" controls playsinline crossorigin="anonymous"></video>
           <!-- Overlay de Subtítulos Personalizado de Alta Fidelidad -->

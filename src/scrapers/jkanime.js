@@ -230,11 +230,11 @@ async function getEpisodeServers(slug, epNo) {
 
     const servers = [];
     const serverLabels = [
-      'Servidor Desu (Recomendado)',
-      'Servidor Um',
-      'Servidor Umv',
-      'Servidor JK Media',
-      'Servidor Alternativo'
+      '⚡ Servidor Principal (Rápido)',
+      'Servidor Secundario',
+      'Servidor Alternativo 1',
+      'Servidor Alternativo 2',
+      'Servidor Respaldo'
     ];
 
     matches.forEach((m, idx) => {
@@ -251,9 +251,33 @@ async function getEpisodeServers(slug, epNo) {
       }
     });
 
+    // Intentar extraer stream HLS (.m3u8) directo para reproducción nativa y fluida sin popups
+    let directM3u8 = null;
+    for (const server of servers) {
+      if (server.embedUrl.includes('jkplayer/um?') || server.embedUrl.includes('jkplayer/umv?')) {
+        try {
+          const embedRes = await axios.get(server.embedUrl, {
+            headers: {
+              'User-Agent': HEADERS['User-Agent'],
+              'Referer': BASE_URL
+            },
+            timeout: 4000
+          });
+          const m3u8Match = embedRes.data.match(/url:\s*'([^']+\.m3u8[^']*)'/);
+          if (m3u8Match) {
+            directM3u8 = m3u8Match[1];
+            break;
+          }
+        } catch (e) {
+          // Si falla la extracción directa, se mantendrán los iframes
+        }
+      }
+    }
+
     return {
       slug,
       episode: epNo,
+      m3u8: directM3u8,
       servers,
       source: 'jkanime'
     };

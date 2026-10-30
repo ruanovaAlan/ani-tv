@@ -1,16 +1,18 @@
-// AniTV Player Controller
+// AniTV Player Controller - Reproductor Optimizado y Detección Automática
 let hlsInstance = null;
 let currentAnime = null;
 let currentEpisodeNo = 1;
 let currentSource = 'jkanime';
 let currentServers = [];
 let activeServerIdx = 0;
+let serverTimeoutTimer = null;
+let currentStreamData = null;
 
 /**
- * Abrir reproductor para un episodio
+ * Abrir reproductor para un episodio con detección automática de servidor
  */
 async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
-  currentSource = source;
+  currentSource = source || 'jkanime';
   currentAnime = { slug, title: animeTitle, epId };
   currentEpisodeNo = parseInt(epNo, 10);
 
@@ -23,6 +25,7 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
   const hlsVideo = document.getElementById('hlsVideo');
   const playerLoader = document.getElementById('playerLoader');
   const playerError = document.getElementById('playerError');
+  const activeQualityBadge = document.getElementById('activeQualityBadge');
 
   playerModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -34,7 +37,13 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
   iframeContainer.classList.add('hidden');
   hlsContainer.classList.add('hidden');
 
-  // Limpiar reproductor HLS previo
+  if (activeQualityBadge) {
+    activeQualityBadge.textContent = 'HD';
+    activeQualityBadge.className = 'badge quality-badge';
+  }
+
+  // Limpiar reproductor previo y timeouts
+  clearTimeout(serverTimeoutTimer);
   if (hlsInstance) {
     hlsInstance.destroy();
     hlsInstance = null;
@@ -43,10 +52,10 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
     hlsVideo.pause();
     hlsVideo.removeAttribute('src');
     hlsVideo.load();
-    // Remover tracks previos
-    while (hlsVideo.firstChild) {
-      hlsVideo.removeChild(hlsVideo.firstChild);
-    }
+  }
+  const oldIframe = document.getElementById('playerIframe');
+  if (oldIframe) {
+    oldIframe.src = 'about:blank';
   }
 
   // Guardar en historial de reproducción
@@ -54,114 +63,122 @@ async function openPlayer(source, slug, epNo, animeTitle, epId = null) {
     slug,
     title: animeTitle,
     episode: currentEpisodeNo,
-    source,
+    source: currentSource,
     timestamp: Date.now()
   });
 
   try {
-    let url = `/api/servers/${source}/${slug}/${epNo}`;
+    let url = `/api/servers/${currentSource}/${slug}/${epNo}`;
     if (epId) url += `?epId=${epId}`;
 
     const res = await fetch(url);
     const data = await res.json();
+    currentStreamData = data;
 
     playerLoader.classList.add('hidden');
 
     if (!data.success) {
-      throw new Error(data.error || 'No se pudieron obtener servidores');
+      throw new Error(data.error || 'No se pudieron obtener servidores para este episodio');
     }
 
-    if (source === 'jkanime') {
-      // Modo Iframe (Servidores en español de JKanime)
-      currentServers = data.servers || [];
-      if (currentServers.length === 0) {
-        throw new Error('No se encontraron servidores para este capítulo');
-      }
+    currentServers = data.servers || [];
 
-      const jkanimeNotice = document.getElementById('jkanimeNotice');
-      if (jkanimeNotice) {
-        jkanimeNotice.classList.remove('hidden');
-        const btnSwitch = document.getElementById('btnSwitchToAniCli');
-        if (btnSwitch) {
-          btnSwitch.onclick = () => {
-            closePlayer();
-            const sourceSelect = document.getElementById('sourceFilter');
-            const searchInput = document.getElementById('searchInput');
-            if (sourceSelect) sourceSelect.value = 'hianime';
-            if (window.state) window.state.currentSource = 'hianime';
-            if (searchInput) {
-              searchInput.value = animeTitle;
-              if (window.performSearch) window.performSearch(animeTitle);
-            }
-          };
-        }
-      }
-
-      renderServerTabs(currentServers);
+    // Prioridad 1: Detección automática de stream HLS nativo (.m3u8)
+    if (data.m3u8) {
+      renderServerTabs(currentServers, true);
+      setupHlsPlayer(data);
+    } else if (currentServers.length > 0) {
+      // Prioridad 2: Servidores Iframe con protección Sandbox anti pop-ups
+      renderServerTabs(currentServers, false);
       selectIframeServer(0);
-    } else if (source === 'hianime') {
-      // Motor ani-cli (HiAnime) con servidores de alta velocidad (HD-1 Megaplay 1080p, ZokoAnime)
-      const jkanimeNotice = document.getElementById('jkanimeNotice');
-      if (jkanimeNotice) jkanimeNotice.classList.add('hidden');
-
-      currentServers = data.servers || [];
-
-      if (currentServers.length === 0 && !data.m3u8) {
-        throw new Error('No se encontraron servidores reproducibles para este capítulo');
-      }
-
-      renderServerTabs(currentServers);
-
-      if (currentServers.length > 0) {
-        // Seleccionar primer servidor disponible (HD-1 con soporte 1080p y subtítulos)
-        selectIframeServer(0);
-      } else if (data.m3u8) {
-        setupHlsPlayer(data);
-      }
+    } else {
+      throw new Error('No se encontraron servidores reproducibles disponibles para este capítulo');
     }
 
-    // Actualizar botones de navegación de episodios
+    // Actualizar botones de navegación (anterior / siguiente)
     updateNavigationButtons();
   } catch (err) {
+    clearTimeout(serverTimeoutTimer);
     playerLoader.classList.add('hidden');
     playerError.classList.remove('hidden');
-    document.getElementById('playerErrorText').textContent = err.message;
+    const errText = document.getElementById('playerErrorText');
+    if (errText) errText.textContent = err.message || 'Error al conectar con los servidores';
   }
 }
 
 /**
- * Renderizar pestañas de servidores (JKanime y HiAnime / ani-cli)
+ * Renderizar pestañas de servidores
  */
-function renderServerTabs(servers) {
+function renderServerTabs(servers, hasHlsStream = false) {
   const serverTabs = document.getElementById('serverTabs');
   serverTabs.innerHTML = '';
 
+  // Si existe stream nativo directo, agregar botón de Servidor Rápido Automático
+  if (hasHlsStream) {
+    const directBtn = document.createElement('button');
+    directBtn.className = 'server-tab-btn active';
+    directBtn.id = 'tabServerDirectHls';
+    directBtn.innerHTML = '⚡ Servidor Rápido (Sin Anuncios)';
+    directBtn.onclick = () => {
+      document.querySelectorAll('.server-tab-btn').forEach(b => b.classList.remove('active'));
+      directBtn.classList.add('active');
+      if (currentStreamData && currentStreamData.m3u8) {
+        setupHlsPlayer(currentStreamData);
+      }
+    };
+    serverTabs.appendChild(directBtn);
+  }
+
   servers.forEach((s, idx) => {
     const btn = document.createElement('button');
-    btn.className = `server-tab-btn ${idx === 0 ? 'active' : ''}`;
+    // Si no hay HLS, el primer iframe es el activo por defecto
+    btn.className = `server-tab-btn ${!hasHlsStream && idx === 0 ? 'active' : ''}`;
     let label = s.name.replace(/^Servidor\s+/i, '');
-    if (label.toLowerCase().includes('hd-1') && !label.toLowerCase().includes('latino') && !label.toLowerCase().includes('dub')) {
-      label = `⚡ ${label} (1080p)`;
+    if (label.toLowerCase().includes('principal') || label.toLowerCase().includes('desu')) {
+      label = `⚡ Servidor Alternativo ${idx + 1}`;
+    } else {
+      label = `Servidor ${idx + 1}`;
     }
     btn.textContent = label;
-    btn.onclick = () => selectIframeServer(idx);
+    btn.onclick = () => {
+      const hlsBtn = document.getElementById('tabServerDirectHls');
+      if (hlsBtn) hlsBtn.classList.remove('active');
+      selectIframeServer(idx);
+    };
     serverTabs.appendChild(btn);
   });
 }
 
 /**
- * Seleccionar servidor iframe
+ * Seleccionar servidor iframe con Sandbox anti pop-ups y detección de fallos
  */
 function selectIframeServer(idx) {
   activeServerIdx = idx;
   const server = currentServers[idx];
   if (!server) return;
 
+  // Pausar HLS si estaba sonando
+  const hlsVideo = document.getElementById('hlsVideo');
+  if (hlsVideo) hlsVideo.pause();
+
   const buttons = document.querySelectorAll('.server-tab-btn');
-  buttons.forEach((b, i) => b.classList.toggle('active', i === idx));
+  buttons.forEach((b, i) => {
+    // Si existe pestaña de HLS directo, compensar índice
+    const hasHls = document.getElementById('tabServerDirectHls');
+    const targetIdx = hasHls ? i - 1 : i;
+    b.classList.toggle('active', targetIdx === idx);
+  });
 
   const iframeContainer = document.getElementById('iframeContainer');
   const hlsContainer = document.getElementById('hlsContainer');
+  const playerLoader = document.getElementById('playerLoader');
+  const activeQualityBadge = document.getElementById('activeQualityBadge');
+
+  if (activeQualityBadge) {
+    activeQualityBadge.textContent = 'HD';
+    activeQualityBadge.className = 'badge quality-badge';
+  }
+
   hlsContainer.classList.add('hidden');
   iframeContainer.classList.remove('hidden');
 
@@ -173,171 +190,68 @@ function selectIframeServer(idx) {
     iframe.setAttribute('allow', 'autoplay; fullscreen; picture-in-picture');
     iframeContainer.appendChild(iframe);
   }
+
+  // PROTECCIÓN CLAVE ANTI POP-UPS:
+  // Al NO incluir allow-popups ni allow-top-navigation, el navegador bloquea
+  // de forma estricta cualquier intento de abrir pestañas o ventanas publicitarias.
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
+
+  // Detección automática de lentitud / falla de servidor
+  clearTimeout(serverTimeoutTimer);
+  serverTimeoutTimer = setTimeout(() => {
+    if (activeServerIdx + 1 < currentServers.length) {
+      if (window.showToast) {
+        window.showToast(`El servidor actual está demorando. Cambiando automáticamente al Servidor ${activeServerIdx + 2}...`);
+      }
+      selectIframeServer(activeServerIdx + 1);
+    }
+  }, 9000);
+
+  iframe.onload = () => {
+    clearTimeout(serverTimeoutTimer);
+    if (playerLoader) playerLoader.classList.add('hidden');
+  };
+
+  iframe.onerror = () => {
+    clearTimeout(serverTimeoutTimer);
+    if (activeServerIdx + 1 < currentServers.length) {
+      if (window.showToast) {
+        window.showToast(`Error de conexión. Cambiando al siguiente servidor...`);
+      }
+      selectIframeServer(activeServerIdx + 1);
+    }
+  };
+
   iframe.src = server.embedUrl;
 }
 
-// Estado de subtítulos personalizados
-let currentCues = [];
-let subtitlesEnabled = true;
-
-function parseVttTimestamp(str) {
-  if (!str) return 0;
-  const parts = str.trim().split(':');
-  if (parts.length === 2) {
-    return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
-  } else if (parts.length === 3) {
-    return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
-  }
-  return 0;
-}
-
-function parseVttContent(text) {
-  const cues = [];
-  const lines = text.split(/\r?\n/);
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i].trim();
-    if (line.includes('-->')) {
-      const parts = line.split('-->');
-      const start = parseVttTimestamp(parts[0]);
-      const end = parseVttTimestamp(parts[1].split(' ')[0]);
-      let txt = '';
-      i++;
-      while (i < lines.length && lines[i].trim() !== '') {
-        const clean = lines[i].trim().replace(/<[^>]+>/g, '');
-        if (clean) txt += (txt ? '\n' : '') + clean;
-        i++;
-      }
-      if (txt) cues.push({ start, end, text: txt });
-    } else {
-      i++;
-    }
-  }
-  return cues;
-}
-
-async function loadSubtitlesFromUrl(url) {
-  const subtitleOverlay = document.getElementById('subtitleOverlay');
-  const subtitleText = document.getElementById('subtitleText');
-
-  if (!url || url === 'off') {
-    subtitlesEnabled = false;
-    currentCues = [];
-    if (subtitleOverlay) subtitleOverlay.style.display = 'none';
-    if (subtitleText) subtitleText.textContent = '';
-    return;
-  }
-
-  subtitlesEnabled = true;
-  try {
-    const res = await fetch(url);
-    const vttData = await res.text();
-    currentCues = parseVttContent(vttData);
-    console.log(`[Subtítulos] Cargados ${currentCues.length} subtítulos`);
-  } catch (err) {
-    console.error('Error cargando subtítulos:', err);
-  }
-}
-
 /**
- * Configurar reproductor Hls.js nativo (HiAnime / ani-cli)
+ * Configurar reproductor Hls.js nativo (Rápido, sin anuncios y directo)
  */
 function setupHlsPlayer(streamData) {
+  clearTimeout(serverTimeoutTimer);
   const iframeContainer = document.getElementById('iframeContainer');
   const hlsContainer = document.getElementById('hlsContainer');
   const hlsVideo = document.getElementById('hlsVideo');
-  const qualitySelect = document.getElementById('qualitySelect');
-  const subtitleSelect = document.getElementById('subtitleSelect');
-  const speedSelect = document.getElementById('speedSelect');
   const activeQualityBadge = document.getElementById('activeQualityBadge');
-  const subtitleOverlay = document.getElementById('subtitleOverlay');
-  const subtitleText = document.getElementById('subtitleText');
+  const oldIframe = document.getElementById('playerIframe');
 
+  if (oldIframe) oldIframe.src = 'about:blank';
   iframeContainer.classList.add('hidden');
   hlsContainer.classList.remove('hidden');
 
-  // Control de velocidad
-  if (speedSelect) {
-    speedSelect.value = '1';
-    speedSelect.onchange = (e) => {
-      const spd = parseFloat(e.target.value);
-      hlsVideo.playbackRate = spd;
-      if (window.showToast) window.showToast(`Velocidad de reproducción: ${spd}x`);
-    };
-  }
-
-  // Limpiar pistas y cues anteriores
-  currentCues = [];
-  if (subtitleOverlay) subtitleOverlay.style.display = 'none';
-  if (subtitleText) subtitleText.textContent = '';
-
-  // Configurar renderizador de subtítulos en tiempo real sobre el video
-  hlsVideo.ontimeupdate = () => {
-    if (!subtitlesEnabled || currentCues.length === 0) {
-      if (subtitleOverlay) subtitleOverlay.style.display = 'none';
-      return;
-    }
-
-    const ct = hlsVideo.currentTime;
-    const activeCue = currentCues.find(c => ct >= c.start && ct <= c.end);
-    if (activeCue) {
-      subtitleText.textContent = activeCue.text;
-      subtitleOverlay.style.display = 'flex';
-    } else {
-      subtitleOverlay.style.display = 'none';
-    }
-  };
-
-  // Poblar selector de subtítulos
-  subtitleSelect.innerHTML = '';
-  const subsList = streamData.subtitles || [];
-
-  subsList.forEach((sub) => {
-    const opt = document.createElement('option');
-    opt.value = sub.src;
-    opt.textContent = sub.label || (sub.lang === 'en' ? '🇬🇧 English (Inglés)' : '🇪🇸 Español (Spanish)');
-    subtitleSelect.appendChild(opt);
-  });
-
-  // Opción para desactivar subtítulos
-  const offOpt = document.createElement('option');
-  offOpt.value = 'off';
-  offOpt.textContent = '🚫 Sin subtítulos';
-  subtitleSelect.appendChild(offOpt);
-
-  // Por defecto seleccionar English (o el primero disponible)
-  let chosenSubUrl = subtitleSelect.options[0]?.value;
-  // Si hay opción en inglés, preferirla
-  for (let i = 0; i < subtitleSelect.options.length; i++) {
-    if (subtitleSelect.options[i].text.toLowerCase().includes('english') || subtitleSelect.options[i].text.toLowerCase().includes('inglés')) {
-      subtitleSelect.selectedIndex = i;
-      chosenSubUrl = subtitleSelect.options[i].value;
-      break;
-    }
-  }
-
-  // Cargar inmediatamente la pista seleccionada
-  if (chosenSubUrl) {
-    loadSubtitlesFromUrl(chosenSubUrl);
-  }
-
-  // Manejador de cambio de subtítulos
-  subtitleSelect.onchange = (e) => {
-    const val = e.target.value;
-    loadSubtitlesFromUrl(val);
-    const chosenName = subtitleSelect.options[subtitleSelect.selectedIndex]?.text || '';
-    if (window.showToast) window.showToast(`Subtítulos: ${chosenName}`);
-  };
-
-  // Inicializar selector de calidad
-  qualitySelect.innerHTML = '<option value="-1">Auto (Adaptativo)</option>';
   if (activeQualityBadge) {
-    activeQualityBadge.textContent = 'Auto';
-    activeQualityBadge.className = 'badge quality-badge';
+    activeQualityBadge.textContent = 'Auto HD';
+    activeQualityBadge.className = 'badge quality-badge hd-badge';
   }
 
   // Soporte Hls.js
   if (window.Hls && Hls.isSupported()) {
+    if (hlsInstance) {
+      hlsInstance.destroy();
+      hlsInstance = null;
+    }
+
     hlsInstance = new Hls({
       xhrSetup: (xhr) => {
         xhr.withCredentials = false;
@@ -350,23 +264,6 @@ function setupHlsPlayer(streamData) {
     hlsInstance.attachMedia(hlsVideo);
 
     hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-      // Poblar opciones de resolución dinámicas
-      if (data.levels && data.levels.length > 0) {
-        qualitySelect.innerHTML = '<option value="-1">Auto (Adaptativo)</option>';
-        data.levels.forEach((lvl, lIdx) => {
-          const opt = document.createElement('option');
-          opt.value = lIdx;
-          const h = lvl.height || 720;
-          let label = `${h}p`;
-          if (h >= 1080) label = `${h}p (Full HD)`;
-          else if (h >= 720) label = `${h}p (HD)`;
-          else if (h >= 480) label = `${h}p (SD)`;
-          else label = `${h}p (Móvil)`;
-
-          opt.textContent = label;
-          qualitySelect.appendChild(opt);
-        });
-      }
       hlsVideo.play().catch(e => console.log('Autoplay bloqueado:', e));
     });
 
@@ -379,32 +276,27 @@ function setupHlsPlayer(streamData) {
       }
     });
 
-    // Cambio manual de calidad
-    qualitySelect.onchange = (e) => {
-      const val = parseInt(e.target.value, 10);
-      if (hlsInstance) {
-        hlsInstance.currentLevel = val;
-        if (val === -1) {
-          if (activeQualityBadge) activeQualityBadge.textContent = 'Auto';
-          if (window.showToast) window.showToast('Calidad ajustada a: Automática (Adaptativa)');
-        } else {
-          const lvl = hlsInstance.levels[val];
-          const h = lvl ? lvl.height : 'HD';
-          if (activeQualityBadge) {
-            activeQualityBadge.textContent = `${h}p`;
-            activeQualityBadge.className = 'badge quality-badge' + (h >= 720 ? ' hd-badge' : '');
+    // Detección de errores fatales con cambio automático a servidor alternativo
+    hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        console.warn('Error fatal en HLS nativo:', data.type, data.details);
+        if (currentServers && currentServers.length > 0) {
+          if (window.showToast) {
+            window.showToast('Conectando automáticamente con servidor de respaldo...');
           }
-          if (window.showToast) window.showToast(`Calidad cambiada a: ${h}p`);
+          selectIframeServer(0);
         }
       }
-    };
+    });
   } else if (hlsVideo.canPlayType('application/vnd.apple.mpegurl')) {
     // Safari / iOS nativo
     hlsVideo.src = streamData.m3u8;
     hlsVideo.play().catch(e => console.log('Autoplay bloqueado:', e));
+  } else if (currentServers.length > 0) {
+    selectIframeServer(0);
   }
 
-  // Botón Ani-Skip (+85s)
+  // Botón Saltar Intro (+85s)
   const skipBtn = document.getElementById('btnSkipIntro');
   if (skipBtn) {
     skipBtn.onclick = () => {
@@ -443,21 +335,13 @@ function navigateEpisode(offset) {
 }
 
 /**
- * Cerrar reproductor
+ * Cerrar reproductor y liberar memoria
  */
 function closePlayer() {
+  clearTimeout(serverTimeoutTimer);
   const playerModal = document.getElementById('playerModal');
   playerModal.classList.add('hidden');
   document.body.style.overflow = '';
-
-  currentCues = [];
-  subtitlesEnabled = true;
-  const subtitleOverlay = document.getElementById('subtitleOverlay');
-  if (subtitleOverlay) subtitleOverlay.style.display = 'none';
-  const subtitleText = document.getElementById('subtitleText');
-  if (subtitleText) subtitleText.textContent = '';
-  const jkanimeNotice = document.getElementById('jkanimeNotice');
-  if (jkanimeNotice) jkanimeNotice.classList.add('hidden');
 
   const iframe = document.getElementById('playerIframe');
   if (iframe) iframe.src = 'about:blank';
@@ -466,7 +350,7 @@ function closePlayer() {
   if (hlsVideo) {
     hlsVideo.pause();
     hlsVideo.removeAttribute('src');
-    hlsVideo.ontimeupdate = null;
+    hlsVideo.load();
   }
 
   if (hlsInstance) {
@@ -476,27 +360,45 @@ function closePlayer() {
 }
 
 /**
- * Atajos de teclado en el reproductor
+ * Atajos de teclado intuitivos para el reproductor
  */
 window.addEventListener('keydown', (e) => {
   const playerModal = document.getElementById('playerModal');
   if (playerModal.classList.contains('hidden')) return;
 
   const hlsVideo = document.getElementById('hlsVideo');
+  const isHlsActive = !document.getElementById('hlsContainer').classList.contains('hidden');
+
   if (e.key === 'Escape') {
     closePlayer();
-  } else if (e.key === ' ' && hlsVideo && !document.getElementById('hlsContainer').classList.contains('hidden')) {
+  } else if ((e.key === ' ' || e.key.toLowerCase() === 'k') && isHlsActive && hlsVideo) {
     e.preventDefault();
     if (hlsVideo.paused) hlsVideo.play();
     else hlsVideo.pause();
-  } else if (e.key === 'ArrowRight' && hlsVideo) {
+  } else if (e.key === 'ArrowRight' && isHlsActive && hlsVideo) {
+    e.preventDefault();
     hlsVideo.currentTime += 10;
-  } else if (e.key === 'ArrowLeft' && hlsVideo) {
+  } else if (e.key === 'ArrowLeft' && isHlsActive && hlsVideo) {
+    e.preventDefault();
     hlsVideo.currentTime -= 10;
+  } else if (e.key === 'ArrowUp' && isHlsActive && hlsVideo) {
+    e.preventDefault();
+    hlsVideo.volume = Math.min(1, Math.round((hlsVideo.volume + 0.1) * 10) / 10);
+    if (window.showToast) window.showToast(`Volumen: ${Math.round(hlsVideo.volume * 100)}%`);
+  } else if (e.key === 'ArrowDown' && isHlsActive && hlsVideo) {
+    e.preventDefault();
+    hlsVideo.volume = Math.max(0, Math.round((hlsVideo.volume - 0.1) * 10) / 10);
+    if (window.showToast) window.showToast(`Volumen: ${Math.round(hlsVideo.volume * 100)}%`);
+  } else if (e.key.toLowerCase() === 'm' && isHlsActive && hlsVideo) {
+    e.preventDefault();
+    hlsVideo.muted = !hlsVideo.muted;
+    if (window.showToast) window.showToast(hlsVideo.muted ? 'Silenciado 🔇' : 'Sonido activado 🔊');
   } else if (e.key.toLowerCase() === 'f') {
     toggleFullscreen();
   } else if (e.key.toLowerCase() === 'n') {
     navigateEpisode(1);
+  } else if (e.key.toLowerCase() === 'p') {
+    navigateEpisode(-1);
   }
 });
 
